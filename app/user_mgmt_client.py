@@ -36,6 +36,7 @@ class UserMgmtClient:
     ) -> dict[str, Any]:
         user = await self._get_required_json("/auth/me", token=token)
         roles = {role.upper() for role in user.get("roles", [])}
+        normalized_path = (current_path or "").lower()
         context: dict[str, Any] = {
             "user": user,
             "page_id": page_id,
@@ -63,6 +64,15 @@ class UserMgmtClient:
                 ],
             )
             task_keys.extend(["users", "roles"])
+
+        if "/pv-ia" in normalized_path:
+            tasks.extend(
+                [
+                    asyncio.ensure_future(self._get_optional_json("/pv-extractions/stats", token=token)),
+                    asyncio.ensure_future(self._get_optional_json("/pv-extractions", token=token)),
+                ],
+            )
+            task_keys.extend(["pv_extraction_stats", "pv_extractions"])
 
         if tasks:
             results = await asyncio.gather(*tasks)
@@ -109,13 +119,134 @@ class UserMgmtClient:
                     roles=payloads["roles"],
                 )
 
+            if payloads.get("pv_extraction_stats") is not None:
+                raw_rows = payloads.get("pv_extractions") or []
+                if isinstance(raw_rows, dict):
+                    raw_rows = raw_rows.get("items") or []
+
+                context["pv_extractions"] = {
+                    "stats": payloads["pv_extraction_stats"],
+                    "recent": [
+                        {
+                            "id": row.get("id"),
+                            "statut": row.get("statut"),
+                            "documentName": row.get("documentName") or row.get("document_name"),
+                            "numeroPolice": row.get("numeroPolice") or row.get("numero_police"),
+                            "ville": row.get("ville"),
+                            "nombreVictimes": row.get("nombreVictimes")
+                            or row.get("nombre_victimes")
+                            or 0,
+                            "updatedAt": row.get("updatedAt") or row.get("updated_at"),
+                        }
+                        for row in raw_rows[: self.settings.recent_reclamations_limit]
+                        if isinstance(row, dict)
+                    ],
+                }
+
         return context
+
+    async def ingest_pv_extraction(
+        self,
+        *,
+        token: str,
+        file_name: str,
+        mime_type: str,
+        file_bytes: bytes,
+    ) -> dict[str, Any]:
+        response = await self.client.post(
+            "/pv-extractions/ingest",
+            headers=self._headers(token),
+            files={
+                "file": (
+                    file_name,
+                    file_bytes,
+                    mime_type or "application/octet-stream",
+                ),
+            },
+            timeout=self.settings.user_mgmt_pv_upload_timeout_seconds,
+        )
+        return self._require_json_response(response)
+
+    async def list_pv_extractions(
+        self,
+        *,
+        token: str,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        response = await self.client.get(
+            "/pv-extractions",
+            headers=self._headers(token),
+            params=params,
+        )
+        return self._require_json_response(response)
+
+    async def get_pv_extraction_stats(
+        self,
+        *,
+        token: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = await self.client.get(
+            "/pv-extractions/stats",
+            headers=self._headers(token),
+            params=params,
+        )
+        return self._require_json_response(response)
+
+    async def get_pv_extraction(
+        self,
+        *,
+        token: str,
+        record_id: str,
+    ) -> dict[str, Any]:
+        response = await self.client.get(
+            f"/pv-extractions/{record_id}",
+            headers=self._headers(token),
+        )
+        return self._require_json_response(response)
+
+    async def update_pv_extraction(
+        self,
+        *,
+        token: str,
+        record_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        response = await self.client.patch(
+            f"/pv-extractions/{record_id}",
+            headers=self._headers(token),
+            json=payload,
+        )
+        return self._require_json_response(response)
+
+    async def delete_pv_extraction(
+        self,
+        *,
+        token: str,
+        record_id: str,
+    ) -> dict[str, Any]:
+        response = await self.client.delete(
+            f"/pv-extractions/{record_id}",
+            headers=self._headers(token),
+        )
+        return self._require_json_response(response)
+
+    async def download_pv_source_document(
+        self,
+        *,
+        token: str,
+        record_id: str,
+    ) -> httpx.Response:
+        response = await self.client.get(
+            f"/pv-extractions/{record_id}/source-document",
+            headers=self._headers(token),
+        )
+        self._raise_for_status(response)
+        return response
 
     async def _get_required_json(self, path: str, *, token: str) -> Any:
         response = await self.client.get(path, headers=self._headers(token))
-        if response.status_code == 401:
-            raise AuthenticationError("Invalid or expired token")
-        response.raise_for_status()
+        self._raise_for_status(response)
         return response.json()
 
     async def _get_optional_json(self, path: str, *, token: str) -> Any | None:
@@ -124,6 +255,16 @@ class UserMgmtClient:
             return None
         response.raise_for_status()
         return response.json()
+
+    def _require_json_response(self, response: httpx.Response) -> Any:
+        self._raise_for_status(response)
+        return response.json()
+
+    @staticmethod
+    def _raise_for_status(response: httpx.Response) -> None:
+        if response.status_code == 401:
+            raise AuthenticationError("Invalid or expired token")
+        response.raise_for_status()
 
     @staticmethod
     def _headers(token: str) -> dict[str, str]:

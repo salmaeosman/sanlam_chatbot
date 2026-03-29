@@ -46,7 +46,7 @@ class HealthResponse(BaseModel):
     status: str
     llm_provider: str = Field(alias="llmProvider")
     llm_model: str = Field(alias="llmModel")
-    llm_base_url: str = Field(alias="llmBaseUrl")
+    llm_configured: bool = Field(alias="llmConfigured")
     llm_reachable: bool = Field(alias="llmReachable")
     llm_model_available: bool = Field(alias="llmModelAvailable")
-    user_mgmt_api_url: str = Field(alias="userMgmtApiUrl")
+    user_mgmt_configured: bool = Field(alias="userMgmtConfigured")

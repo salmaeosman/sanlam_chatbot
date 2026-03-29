@@ -68,6 +68,54 @@ class GeminiChatService:
         if not self.is_configured:
             raise GeminiServiceError("GEMINI_API_KEY is missing.")
 
+        data = await self._generate_content(
+            system_prompt=system_prompt,
+            conversation_messages=conversation_messages,
+            max_output_tokens=self.settings.gemini_max_output_tokens,
+        )
+        text = self._extract_text(data)
+        if not text:
+            raise GeminiServiceError("Gemini n'a pas renvoye de contenu exploitable.")
+
+        if self._response_was_truncated(data):
+            retried_text = await self._retry_truncated_reply(
+                system_prompt=system_prompt,
+                conversation_messages=conversation_messages,
+            )
+            if retried_text:
+                return retried_text
+
+        return text
+
+    async def _retry_truncated_reply(
+        self,
+        *,
+        system_prompt: str,
+        conversation_messages: list[dict[str, str]],
+    ) -> str | None:
+        retry_max_tokens = min(max(self.settings.gemini_max_output_tokens * 2, 1600), 4096)
+        if retry_max_tokens <= self.settings.gemini_max_output_tokens:
+            return None
+
+        try:
+            retried_payload = await self._generate_content(
+                system_prompt=system_prompt,
+                conversation_messages=conversation_messages,
+                max_output_tokens=retry_max_tokens,
+            )
+        except GeminiServiceError:
+            return None
+
+        retried_text = self._extract_text(retried_payload)
+        return retried_text or None
+
+    async def _generate_content(
+        self,
+        *,
+        system_prompt: str,
+        conversation_messages: list[dict[str, str]],
+        max_output_tokens: int,
+    ) -> dict[str, Any]:
         payload = {
             "system_instruction": {
                 "parts": [
@@ -88,7 +136,7 @@ class GeminiChatService:
                 for message in conversation_messages
             ],
             "generationConfig": {
-                "maxOutputTokens": self.settings.gemini_max_output_tokens,
+                "maxOutputTokens": max_output_tokens,
             },
         }
 
@@ -108,12 +156,7 @@ class GeminiChatService:
         if response.is_error:
             raise GeminiServiceError(self._extract_error(response))
 
-        data = response.json()
-        text = self._extract_text(data)
-        if not text:
-            raise GeminiServiceError("Gemini n'a pas renvoye de contenu exploitable.")
-
-        return text
+        return response.json()
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -151,3 +194,10 @@ class GeminiChatService:
                     chunks.append(text.strip())
 
         return "\n".join(chunks).strip()
+
+    def _response_was_truncated(self, payload: dict[str, Any]) -> bool:
+        candidates = payload.get("candidates") or []
+        for candidate in candidates:
+            if str(candidate.get("finishReason") or "").upper() == "MAX_TOKENS":
+                return True
+        return False
