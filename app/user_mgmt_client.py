@@ -27,6 +27,10 @@ class UserMgmtClient:
     async def aclose(self) -> None:
         await self.client.aclose()
 
+    async def get_current_user(self, *, token: str) -> dict[str, Any]:
+        user = await self._get_required_json("/auth/me", token=token)
+        return user if isinstance(user, dict) else {}
+
     async def get_live_context(
         self,
         *,
@@ -34,7 +38,7 @@ class UserMgmtClient:
         page_id: str | None,
         current_path: str | None,
     ) -> dict[str, Any]:
-        user = await self._get_required_json("/auth/me", token=token)
+        user = await self.get_current_user(token=token)
         roles = {role.upper() for role in user.get("roles", [])}
         normalized_path = (current_path or "").lower()
         context: dict[str, Any] = {

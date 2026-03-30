@@ -8,9 +8,12 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.config import Settings, get_settings
 from app.gemini_service import GeminiChatService, GeminiServiceError
+from app.pv_service import PvService
+from app.pv_schemas import PvRecord
 from app.prompts import (
     build_session_title,
     build_suggestions,
@@ -43,31 +46,36 @@ class ServiceContainer:
     store: ChatSessionStore
     user_mgmt: UserMgmtClient
     gemini: GeminiChatService
+    pv: PvService
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    settings = get_settings()
-    services = ServiceContainer(
-        settings=settings,
-        store=ChatSessionStore(settings.chatbot_db_path),
-        user_mgmt=UserMgmtClient(settings),
-        gemini=GeminiChatService(settings),
-    )
-    app.state.services = services
-    try:
-        yield
-    finally:
-        await services.user_mgmt.aclose()
-        await services.gemini.aclose()
+def create_app(settings: Settings | None = None) -> FastAPI:
+    effective_settings = settings or get_settings()
+    effective_settings.chatbot_db_path.parent.mkdir(parents=True, exist_ok=True)
+    effective_settings.pv_db_path.parent.mkdir(parents=True, exist_ok=True)
+    effective_settings.pv_upload_dir.mkdir(parents=True, exist_ok=True)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        user_mgmt = UserMgmtClient(effective_settings)
+        services = ServiceContainer(
+            settings=effective_settings,
+            store=ChatSessionStore(effective_settings.chatbot_db_path),
+            user_mgmt=user_mgmt,
+            gemini=GeminiChatService(effective_settings),
+            pv=PvService(effective_settings, user_mgmt),
+        )
+        app.state.services = services
+        try:
+            yield
+        finally:
+            await services.user_mgmt.aclose()
+            await services.gemini.aclose()
 
-def create_app() -> FastAPI:
-    settings = get_settings()
-    app = FastAPI(title=settings.app_name, lifespan=lifespan)
+    app = FastAPI(title=effective_settings.app_name, lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.frontend_origins,
+        allow_origins=effective_settings.frontend_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -76,7 +84,7 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
         response = await call_next(request)
-        if settings.security_headers_enabled:
+        if effective_settings.security_headers_enabled:
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers.setdefault("Pragma", "no-cache")
             response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -98,7 +106,7 @@ def create_app() -> FastAPI:
             llmConfigured=services.gemini.is_configured,
             llmReachable=gemini_status["reachable"],
             llmModelAvailable=gemini_status["modelAvailable"],
-            userMgmtConfigured=bool(settings.user_mgmt_api_url.strip()),
+            userMgmtConfigured=bool(effective_settings.user_mgmt_api_url.strip()),
         )
 
     @app.post("/api/v1/chat/sessions", response_model=ChatSessionResponse)
@@ -179,7 +187,8 @@ def create_app() -> FastAPI:
         services.store.set_last_response_id(session_id, None)
         return build_session_response(services, session_id, context)
 
-    @app.post("/pv-extractions/ingest")
+    @app.post("/pv-extractions/ingest", response_model=PvRecord)
+    @app.post("/api/v1/pv-extractions/ingest", response_model=PvRecord, include_in_schema=False)
     async def ingest_pv_extraction(
         request: Request,
         file: UploadFile = File(...),
@@ -187,183 +196,90 @@ def create_app() -> FastAPI:
         services: ServiceContainer = Depends(get_services),
     ) -> dict[str, Any]:
         validate_upload_content_length(request, services.settings)
-
-        try:
-            file_bytes = await file.read()
-        finally:
-            await file.close()
-
-        file_name, mime_type = validate_pv_upload(
-            file_name=file.filename,
-            declared_mime_type=file.content_type,
-            file_bytes=file_bytes,
-            settings=services.settings,
+        return await services.pv.ingest_record(
+            base_url=str(request.base_url),
+            token=token,
+            file=file,
         )
 
-        try:
-            return await services.user_mgmt.ingest_pv_extraction(
-                token=token,
-                file_name=file_name,
-                mime_type=mime_type,
-                file_bytes=file_bytes,
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible d'extraire le PV pour le moment",
-            ) from error
-
-    @app.get("/pv-extractions")
+    @app.get("/pv-extractions", response_model=list[PvRecord])
+    @app.get("/api/v1/pv-extractions", response_model=list[PvRecord], include_in_schema=False)
     async def list_pv_extractions(
         request: Request,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> Any:
-        try:
-            return await services.user_mgmt.list_pv_extractions(
-                token=token,
-                params=dict(request.query_params),
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible de recuperer les extractions PV",
-            ) from error
+    ) -> list[dict[str, Any]]:
+        return await services.pv.list_records(
+            base_url=str(request.base_url),
+            token=token,
+        )
 
     @app.get("/pv-extractions/stats")
+    @app.get("/api/v1/pv-extractions/stats", include_in_schema=False)
     async def get_pv_extraction_stats(
-        request: Request,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
     ) -> dict[str, Any]:
-        try:
-            return await services.user_mgmt.get_pv_extraction_stats(
-                token=token,
-                params=dict(request.query_params),
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible de recuperer les statistiques PV",
-            ) from error
+        return await services.pv.get_stats(token=token)
 
-    @app.get("/pv-extractions/{record_id}")
+    @app.get("/pv-extractions/{record_id}", response_model=PvRecord)
+    @app.get("/api/v1/pv-extractions/{record_id}", response_model=PvRecord, include_in_schema=False)
     async def get_pv_extraction(
+        request: Request,
         record_id: str,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
     ) -> dict[str, Any]:
-        try:
-            return await services.user_mgmt.get_pv_extraction(
-                token=token,
-                record_id=record_id,
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible de recuperer ce proces-verbal",
-            ) from error
+        return await services.pv.get_record(
+            base_url=str(request.base_url),
+            token=token,
+            record_id=record_id,
+        )
 
-    @app.patch("/pv-extractions/{record_id}")
+    @app.patch("/pv-extractions/{record_id}", response_model=PvRecord)
+    @app.patch("/api/v1/pv-extractions/{record_id}", response_model=PvRecord, include_in_schema=False)
     async def update_pv_extraction(
+        request: Request,
         record_id: str,
         payload: dict[str, Any],
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
     ) -> dict[str, Any]:
-        try:
-            return await services.user_mgmt.update_pv_extraction(
-                token=token,
-                record_id=record_id,
-                payload=payload,
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible de mettre a jour ce proces-verbal",
-            ) from error
+        return await services.pv.update_record(
+            base_url=str(request.base_url),
+            token=token,
+            record_id=record_id,
+            payload=payload,
+        )
 
     @app.delete("/pv-extractions/{record_id}")
+    @app.delete("/api/v1/pv-extractions/{record_id}", include_in_schema=False)
     async def delete_pv_extraction(
         record_id: str,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
     ) -> dict[str, Any]:
-        try:
-            return await services.user_mgmt.delete_pv_extraction(
-                token=token,
-                record_id=record_id,
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible de supprimer ce proces-verbal",
-            ) from error
+        return await services.pv.delete_record(token=token, record_id=record_id)
 
     @app.get("/pv-extractions/{record_id}/source-document")
+    @app.get("/api/v1/pv-extractions/{record_id}/source-document", include_in_schema=False)
     async def download_pv_source_document(
         record_id: str,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> Response:
-        try:
-            upstream_response = await services.user_mgmt.download_pv_source_document(
-                token=token,
-                record_id=record_id,
-            )
-        except AuthenticationError as error:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(error),
-            ) from error
-        except httpx.HTTPError as error:
-            raise map_upstream_http_error(
-                error,
-                fallback="Impossible de telecharger le document source",
-            ) from error
-
-        forwarded_headers: dict[str, str] = {}
-        disposition = upstream_response.headers.get("content-disposition")
-        if disposition:
-            forwarded_headers["Content-Disposition"] = disposition
-        forwarded_headers["Cache-Control"] = "private, no-store, max-age=0"
-        forwarded_headers["Pragma"] = "no-cache"
-        forwarded_headers["X-Content-Type-Options"] = "nosniff"
-
-        return Response(
-            content=upstream_response.content,
-            media_type=upstream_response.headers.get("content-type") or "application/octet-stream",
-            headers=forwarded_headers,
+    ) -> FileResponse:
+        source_path, file_name = await services.pv.get_source_document(
+            token=token,
+            record_id=record_id,
+        )
+        return FileResponse(
+            path=source_path,
+            filename=file_name,
+            headers={
+                "Cache-Control": "private, no-store, max-age=0",
+                "Pragma": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     return app
@@ -385,7 +301,7 @@ async def get_bearer_token(
 
     cookie_token = extract_token_from_cookie_header(
         cookie_header=request.headers.get("cookie"),
-        cookie_name=get_settings().auth_cookie_name,
+        cookie_name=get_services(request).settings.auth_cookie_name,
     )
     if cookie_token:
         return cookie_token
@@ -503,83 +419,6 @@ def validate_upload_content_length(request: Request, settings: Settings) -> None
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"Le fichier depasse la limite autorisee de {settings.pv_upload_max_bytes // (1024 * 1024)} Mo",
         )
-
-
-def validate_pv_upload(
-    *,
-    file_name: str | None,
-    declared_mime_type: str | None,
-    file_bytes: bytes,
-    settings: Settings,
-) -> tuple[str, str]:
-    if not file_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Le fichier envoye est vide",
-        )
-
-    if len(file_bytes) > settings.pv_upload_max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Le fichier depasse la limite autorisee de {settings.pv_upload_max_bytes // (1024 * 1024)} Mo",
-        )
-
-    sniffed_mime_type = sniff_pv_mime_type(file_bytes)
-    declared = normalize_mime_type(declared_mime_type)
-    allowed_types = settings.pv_upload_allowed_types
-
-    if sniffed_mime_type is None or sniffed_mime_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Format de fichier non supporte. Utilisez PDF, JPG, PNG ou WEBP.",
-        )
-
-    if declared and declared != "application/octet-stream" and declared not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Le type MIME du fichier n'est pas autorise",
-        )
-
-    if declared and declared != "application/octet-stream" and declared != sniffed_mime_type:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Le type MIME du fichier ne correspond pas a son contenu",
-        )
-
-    return sanitize_upload_filename(file_name, sniffed_mime_type=sniffed_mime_type), sniffed_mime_type
-
-
-def normalize_mime_type(value: str | None) -> str:
-    if not value:
-        return ""
-    return value.split(";", 1)[0].strip().lower()
-
-
-def sniff_pv_mime_type(file_bytes: bytes) -> str | None:
-    if file_bytes.startswith(b"%PDF-"):
-        return "application/pdf"
-    if file_bytes.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if len(file_bytes) >= 12 and file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP":
-        return "image/webp"
-    return None
-
-
-def sanitize_upload_filename(file_name: str | None, *, sniffed_mime_type: str) -> str:
-    candidate = (file_name or "pv-document").replace("\\", "/").split("/")[-1].strip()
-    if not candidate:
-        candidate = "pv-document"
-
-    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", candidate).strip("._")
-    if not safe_name:
-        safe_name = "pv-document"
-
-    extension = SAFE_UPLOAD_EXTENSION_BY_MIME.get(sniffed_mime_type, "")
-    base_name = safe_name.rsplit(".", 1)[0] if "." in safe_name else safe_name
-    base_name = (base_name or "pv-document")[:120]
-    return f"{base_name}{extension}" if extension else base_name
 
 
 def build_session_response(

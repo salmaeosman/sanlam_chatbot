@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -48,11 +48,39 @@ class Settings(BaseSettings):
     recent_reclamations_limit: int = Field(default=5, alias="RECENT_RECLAMATIONS_LIMIT")
     recent_notifications_limit: int = Field(default=5, alias="RECENT_NOTIFICATIONS_LIMIT")
 
+    pv_db_path: Path = Field(
+        default=Path("data") / "pv_records.sqlite3",
+        alias="PV_DB_PATH",
+    )
+    pv_upload_dir: Path = Field(
+        default=Path("data") / "pv_uploads",
+        alias="PV_UPLOAD_DIR",
+    )
+    pv_remote_ingest_url: str = Field(default="", alias="PV_REMOTE_INGEST_URL")
+    pv_remote_ingest_timeout_seconds: float = Field(
+        default=180.0,
+        alias="PV_REMOTE_INGEST_TIMEOUT_SECONDS",
+    )
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
+
+    @field_validator("app_debug", mode="before")
+    @classmethod
+    def parse_app_debug(cls, value: object) -> bool | object:
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on", "debug", "dev"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "release", "prod", "production"}:
+            return False
+        return value
 
     @property
     def frontend_origins(self) -> list[str]:
@@ -78,4 +106,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     settings.chatbot_db_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.pv_db_path.parent.mkdir(parents=True, exist_ok=True)
+    settings.pv_upload_dir.mkdir(parents=True, exist_ok=True)
     return settings
