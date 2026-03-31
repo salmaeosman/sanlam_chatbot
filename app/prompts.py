@@ -9,8 +9,7 @@ Application cible:
 - Bawaba de Sanlam est le portail principal utilise par les utilisateurs.
 - Les services backend internes alimentent les donnees et les parcours du portail.
 - Le produit gere l'authentification JWT, les utilisateurs, les roles, les dashboards par role, les affectations avocat, les reclamations, les documents et les notifications.
-- Les modules connus incluent la Plateforme Manager, la gestion des affectations avocat, les dashboards Ouverture, Judiciaire, Avocat et Medecin, ainsi que le module PV IA.
-- Quand l'utilisateur parle de 'Agent PV IA' ou de 'PV IA', il s'agit d'un ecran metier de Bawaba de Sanlam pour charger un proces-verbal, lancer l'extraction IA et controler les champs detectes. Ce n'est pas un agent autonome separe.
+- Les modules connus incluent la Plateforme Manager, la gestion des affectations avocat, ainsi que les dashboards Ouverture, Judiciaire, Avocat et Medecin.
 - Les reclamations concernent surtout les roles AVOCAT, MEDECIN et GESTIONNAIRE_JUDICIAIRE.
 - Les roles MANAGER gerent surtout les utilisateurs et les roles.
 - Le chatbot est un assistant de support applicatif et de navigation: il n'ecrit pas en base et ne doit jamais pretendre avoir modifie des donnees.
@@ -31,12 +30,10 @@ PRODUCT_MODULES = [
     "Plateforme Manager: consulter les utilisateurs, trier par nom ou roles, ajouter ou modifier un utilisateur, supprimer un utilisateur et ouvrir la gestion des roles d'un avocat.",
     "Gestion des affectations avocat: rechercher par avocat ou juridiction, consulter les affectations, ouvrir le detail d'un avocat et ajouter, modifier ou supprimer des creneaux de travail.",
     "Dashboard ouverture: espace personnel du gestionnaire ouverture avec recherche par numero de sinistre, numero de mission, assure et date de survenance.",
-    "Pre-ouverture assistee par IA: vue ouverture du module PV IA pour revoir les PV extraits, completer les champs utiles et preparer la suite du traitement.",
     "Dashboard judiciaire: espace personnel du gestionnaire judiciaire avec recherche et acces aux files de reclamations.",
     "Reclamations judiciaires: files 'remontes au superviseur', 'en attente', 'clotures' et 'redressements contestes' avec action de controle.",
     "Controle judiciaire d'une reclamation: onglets Documents, Dossier sinistre, Intervenants, Details et Echanges, plus actions Rejeter et Cloturer.",
-    "Dashboard avocat: espace personnel avec vue rapide des dossiers, acces au module Agent PV IA et au suivi des reclamations.",
-    "Agent PV IA: depot d'un PV PDF/JPG/PNG/WEBP, extraction IA, recherche, filtres, edition des champs, consultation des victimes et vehicules et telechargement de la source.",
+    "Dashboard avocat: espace personnel avec vue rapide des dossiers et acces au suivi des reclamations.",
     "Reclamations avocat et medecin: suivi des dossiers, filtres par police/sinistre/cabinet/date, detail d'une reclamation, messages et vue synthese.",
     "Creation de reclamation: formulaire avec categorie, type de demande, motif, numero de police, numero de sinistre, date de survenance, commentaire et pieces jointes; la reference cabinet est obligatoire pour l'avocat.",
     "Dashboard medecin: espace personnel de recherche de mission par numero de sinistre, numero de mission ou nom de l'assure.",
@@ -68,13 +65,12 @@ PAGE_GUIDES = {
     },
     "ouverturedashboardpage": {
         "title": "Dashboard ouverture",
-        "summary": "Cet espace sert au gestionnaire ouverture pour retrouver un dossier et acceder au parcours de pre-ouverture assistee.",
+        "summary": "Cet espace sert au gestionnaire ouverture pour retrouver un dossier et consulter son contexte.",
         "actions": [
             "rechercher par numero de sinistre",
             "rechercher par numero de mission",
             "rechercher par nom de l'assure",
             "ajouter la date de survenance dans les recherches ciblees",
-            "ouvrir la vue de pre-ouverture assistee par IA",
         ],
     },
     "judiciairedashboardpage": {
@@ -89,10 +85,9 @@ PAGE_GUIDES = {
     },
     "avocatdashboardpage": {
         "title": "Dashboard avocat",
-        "summary": "Cet espace centralise la vue rapide avocat, les reclamations et le module Agent PV IA.",
+        "summary": "Cet espace centralise la vue rapide avocat et les reclamations.",
         "actions": [
             "consulter une vue rapide des dossiers",
-            "ouvrir l'Agent PV IA pour pre-ouvrir un sinistre",
             "suivre les reclamations",
             "creer une nouvelle reclamation",
         ],
@@ -160,42 +155,6 @@ ROUTE_GUIDES = [
             "Quels champs sont obligatoires pour une reclamation medecin ?",
             "Quels documents puis-je joindre a une reclamation ?",
             "Comment creer une reclamation medecin ?",
-        ],
-    },
-    {
-        "starts_with": "/dashboard/avocat/pv-ia",
-        "title": "Agent PV IA",
-        "summary": "Cette vue permet a l'avocat de deposer un proces-verbal, lancer l'extraction IA, verifier les champs structures et enregistrer les corrections.",
-        "actions": [
-            "charger un PV au format PDF, JPG, PNG ou WEBP",
-            "lancer l'analyse IA du document",
-            "consulter les statistiques PV total, en cours, termines et avec victimes",
-            "rechercher un PV par document, numero de police ou ville et filtrer par statut",
-            "modifier le statut, le nom du document, le numero de police, la date de survenance, la ville, l'adresse et les resumes FR/AR",
-            "consulter les victimes detectees et les vehicules detectes",
-            "telecharger le document source et enregistrer les modifications",
-        ],
-        "suggestions": [
-            "Que fait l'Agent PV IA ?",
-            "Quels champs sont extraits d'un PV ?",
-            "Comment corriger un PV avant enregistrement ?",
-        ],
-    },
-    {
-        "starts_with": "/dashboard/ouverture/pv-ia",
-        "title": "Pre-ouverture assistee par IA",
-        "summary": "Cette vue permet au gestionnaire ouverture de revoir les PV extraits, completer les champs utiles et preparer la pre-ouverture du dossier.",
-        "actions": [
-            "consulter la liste des PV analyses",
-            "relire les champs extraits automatiquement",
-            "completer ou corriger les informations utiles",
-            "controler les victimes et les vehicules detectes",
-            "enregistrer la pre-ouverture",
-        ],
-        "suggestions": [
-            "Que fait la pre-ouverture assistee par IA ?",
-            "Comment preparer un dossier depuis un PV extrait ?",
-            "Quels champs dois-je verifier avant la pre-ouverture ?",
         ],
     },
     {
@@ -267,11 +226,8 @@ ROLE_CAPABILITIES = {
     "GESTIONNAIRE_OUVERTURE": [
         "expliquer le dashboard ouverture",
         "aider a orienter l'utilisateur vers le bon ecran",
-        "expliquer la pre-ouverture assistee par IA",
     ],
     "AVOCAT": [
-        "expliquer le module Agent PV IA",
-        "decrire les champs extraits depuis un PV",
         "aider a creer une reclamation",
         "expliquer les champs obligatoires avocat",
         "suivre les retours du gestionnaire judiciaire",
@@ -298,13 +254,10 @@ ROLE_SUGGESTIONS = {
     ],
     "GESTIONNAIRE_OUVERTURE": [
         "A quoi sert mon dashboard ouverture ?",
-        "Que fait la pre-ouverture assistee par IA ?",
         "Quel ecran dois-je utiliser pour retrouver un dossier ?",
         "Explique le role ouverture dans l'application",
     ],
     "AVOCAT": [
-        "Que fait l'Agent PV IA ?",
-        "Quels champs sont extraits d'un PV ?",
         "Comment creer une nouvelle reclamation ?",
         "Quels documents dois-je fournir ?",
         "Explique les statuts de mes reclamations",
@@ -518,33 +471,6 @@ def render_live_sections(context: dict) -> list[str]:
                     f"claimNumber={row.get('claimNumber') or 'n/a'} "
                     f"policyNumber={row.get('policyNumber') or 'n/a'} "
                     f"category={row.get('category') or 'n/a'}",
-                )
-
-    pv_extractions = context.get("pv_extractions")
-    if pv_extractions:
-        stats = pv_extractions.get("stats") or {}
-        sections.extend(
-            [
-                "PV IA live:",
-                f"- total: {stats.get('total', 0)}",
-                f"- enCoursCount: {stats.get('enCoursCount', 0)}",
-                f"- termineCount: {stats.get('termineCount', 0)}",
-                f"- erreurCount: {stats.get('erreurCount', 0)}",
-                f"- withVictimsCount: {stats.get('withVictimsCount', 0)}",
-            ],
-        )
-
-        recent = pv_extractions.get("recent", [])
-        if recent:
-            sections.append("- PV recents visibles:")
-            for row in recent:
-                sections.append(
-                    "  - "
-                    f"id={row.get('id')} statut={row.get('statut')} "
-                    f"documentName={row.get('documentName') or 'n/a'} "
-                    f"numeroPolice={row.get('numeroPolice') or 'n/a'} "
-                    f"ville={row.get('ville') or 'n/a'} "
-                    f"victimes={row.get('nombreVictimes', 0)}",
                 )
 
     manager = context.get("manager")

@@ -34,10 +34,6 @@ class Settings(BaseSettings):
         alias="USER_MGMT_PV_UPLOAD_TIMEOUT_SECONDS",
     )
     pv_upload_max_bytes: int = Field(default=15 * 1024 * 1024, alias="PV_UPLOAD_MAX_BYTES")
-    pv_upload_allowed_types_raw: str = Field(
-        default="application/pdf,image/jpeg,image/png,image/webp",
-        alias="PV_UPLOAD_ALLOWED_TYPES",
-    )
 
     frontend_origins_raw: str = Field(
         default="http://localhost:5173",
@@ -54,20 +50,6 @@ class Settings(BaseSettings):
     legal_reference_chunk_size: int = Field(default=1600, alias="LEGAL_REFERENCE_CHUNK_SIZE")
     legal_reference_chunk_overlap: int = Field(default=250, alias="LEGAL_REFERENCE_CHUNK_OVERLAP")
     legal_reference_max_snippets: int = Field(default=4, alias="LEGAL_REFERENCE_MAX_SNIPPETS")
-
-    pv_db_path: Path = Field(
-        default=Path("data") / "pv_records.sqlite3",
-        alias="PV_DB_PATH",
-    )
-    pv_upload_dir: Path = Field(
-        default=Path("data") / "pv_uploads",
-        alias="PV_UPLOAD_DIR",
-    )
-    pv_remote_ingest_url: str = Field(default="", alias="PV_REMOTE_INGEST_URL")
-    pv_remote_ingest_timeout_seconds: float = Field(
-        default=180.0,
-        alias="PV_REMOTE_INGEST_TIMEOUT_SECONDS",
-    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -101,14 +83,6 @@ class Settings(BaseSettings):
         return origins
 
     @property
-    def pv_upload_allowed_types(self) -> set[str]:
-        return {
-            mime_type.strip().lower()
-            for mime_type in self.pv_upload_allowed_types_raw.split(",")
-            if mime_type.strip()
-        }
-
-    @property
     def legal_reference_paths(self) -> list[Path]:
         paths: list[Path] = []
         for raw_path in self.legal_reference_paths_raw.split(","):
@@ -127,6 +101,4 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     settings = Settings()
     settings.chatbot_db_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.pv_db_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.pv_upload_dir.mkdir(parents=True, exist_ok=True)
     return settings

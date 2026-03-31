@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 import httpx
 
 from app.config import Settings
+from app.pv_schemas import PV_EXTRACTION_RESPONSE_JSON_SCHEMA
 
 
 class GeminiServiceError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int = 503) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GeminiChatService:
@@ -86,6 +91,115 @@ class GeminiChatService:
                 return retried_text
 
         return text
+
+    async def extract_pv_data(
+        self,
+        *,
+        mime_type: str,
+        file_bytes: bytes,
+    ) -> dict[str, Any]:
+        if not self.is_configured:
+            raise GeminiServiceError("GEMINI_API_KEY n est pas configure", status_code=500)
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "inline_data": {
+                                "mime_type": mime_type,
+                                "data": base64.b64encode(file_bytes).decode("ascii"),
+                            },
+                        },
+                        {
+                            "text": (
+                                "Analyse ce proces-verbal d accident et extrais les informations "
+                                "en francais ET en arabe. Sois tres precis et extrait toutes les "
+                                "informations disponibles."
+                            ),
+                        },
+                    ],
+                },
+            ],
+            "systemInstruction": {
+                "parts": [
+                    {
+                        "text": (
+                            "Tu es un agent specialise dans l extraction de donnees a partir "
+                            "de proces-verbaux d accidents de circulation. Le document peut "
+                            "etre en francais, en arabe ou bilingue. Extrais les informations "
+                            "exactement telles qu elles apparaissent dans le document. Pour "
+                            "chaque champ textuel, fournis la version francaise suffixe _fr et "
+                            "la version arabe suffixe _ar. Si le texte n existe que dans une "
+                            "langue, traduis-le proprement dans l autre. Le numero_police doit "
+                            "correspondre au numero de police d assurance et non au numero du "
+                            "proces-verbal."
+                        ),
+                    },
+                ],
+            },
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "responseJsonSchema": PV_EXTRACTION_RESPONSE_JSON_SCHEMA,
+            },
+        }
+
+        try:
+            response = await self.client.post(
+                f"/v1beta/models/{self.settings.gemini_model}:generateContent",
+                headers=self._headers(),
+                json=payload,
+            )
+        except httpx.ConnectError as error:
+            raise GeminiServiceError(
+                f"Gemini n est pas joignable sur {self.settings.gemini_base_url}.",
+                status_code=502,
+            ) from error
+        except httpx.HTTPError as error:
+            raise GeminiServiceError(
+                f"Requete Gemini echouee: {error}",
+                status_code=502,
+            ) from error
+
+        if response.status_code == 429:
+            raise GeminiServiceError(
+                "Trop de requetes, veuillez reessayer plus tard.",
+                status_code=429,
+            )
+
+        if response.status_code == 402:
+            raise GeminiServiceError(
+                "Credits Gemini insuffisants.",
+                status_code=402,
+            )
+
+        if response.is_error:
+            raise GeminiServiceError(
+                f"Erreur Gemini lors de l extraction du PV ({response.status_code})",
+                status_code=502,
+            )
+
+        data = response.json()
+        text_payload = self._extract_text(data)
+        if not text_payload:
+            raise GeminiServiceError(
+                "Aucune extraction structuree n a ete retournee par Gemini",
+                status_code=502,
+            )
+
+        try:
+            parsed = json.loads(text_payload)
+        except json.JSONDecodeError as error:
+            raise GeminiServiceError(
+                "La reponse JSON de Gemini est invalide",
+                status_code=502,
+            ) from error
+
+        if isinstance(parsed, dict):
+            return parsed
+
+        raise GeminiServiceError("La reponse de Gemini est invalide", status_code=502)
 
     async def _retry_truncated_reply(
         self,

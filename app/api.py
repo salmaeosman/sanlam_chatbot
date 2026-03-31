@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -8,13 +7,11 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
 from app.config import Settings, get_settings
 from app.gemini_service import GeminiChatService, GeminiServiceError
 from app.legal_reference_service import LegalReferenceService
 from app.pv_service import PvService
-from app.pv_schemas import PvRecord
 from app.prompts import (
     build_session_title,
     build_suggestions,
@@ -33,12 +30,6 @@ from app.user_mgmt_client import AuthenticationError, UserMgmtClient
 
 
 UPLOAD_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-SAFE_UPLOAD_EXTENSION_BY_MIME = {
-    "application/pdf": ".pdf",
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-}
 
 
 @dataclass(slots=True)
@@ -54,19 +45,18 @@ class ServiceContainer:
 def create_app(settings: Settings | None = None) -> FastAPI:
     effective_settings = settings or get_settings()
     effective_settings.chatbot_db_path.parent.mkdir(parents=True, exist_ok=True)
-    effective_settings.pv_db_path.parent.mkdir(parents=True, exist_ok=True)
-    effective_settings.pv_upload_dir.mkdir(parents=True, exist_ok=True)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         user_mgmt = UserMgmtClient(effective_settings)
+        gemini = GeminiChatService(effective_settings)
         services = ServiceContainer(
             settings=effective_settings,
             store=ChatSessionStore(effective_settings.chatbot_db_path),
             user_mgmt=user_mgmt,
-            gemini=GeminiChatService(effective_settings),
+            gemini=gemini,
             legal_reference=LegalReferenceService(effective_settings),
-            pv=PvService(effective_settings, user_mgmt),
+            pv=PvService(effective_settings, user_mgmt, gemini),
         )
         app.state.services = services
         try:
@@ -196,8 +186,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         services.store.set_last_response_id(session_id, None)
         return build_session_response(services, session_id, context)
 
-    @app.post("/pv-extractions/ingest", response_model=PvRecord)
-    @app.post("/api/v1/pv-extractions/ingest", response_model=PvRecord, include_in_schema=False)
+    @app.post("/pv-extractions/ingest", status_code=status.HTTP_201_CREATED)
+    @app.post(
+        "/api/v1/pv-extractions/ingest",
+        include_in_schema=False,
+        status_code=status.HTTP_201_CREATED,
+    )
     async def ingest_pv_extraction(
         request: Request,
         file: UploadFile = File(...),
@@ -205,57 +199,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         services: ServiceContainer = Depends(get_services),
     ) -> dict[str, Any]:
         validate_upload_content_length(request, services.settings)
-        return await services.pv.ingest_record(
-            base_url=str(request.base_url),
-            token=token,
-            file=file,
-        )
+        try:
+            return await services.pv.ingest_record(token=token, file=file)
+        except GeminiServiceError as error:
+            raise HTTPException(
+                status_code=getattr(error, "status_code", status.HTTP_503_SERVICE_UNAVAILABLE),
+                detail=str(error),
+            ) from error
 
-    @app.get("/pv-extractions", response_model=list[PvRecord])
-    @app.get("/api/v1/pv-extractions", response_model=list[PvRecord], include_in_schema=False)
+    @app.get("/pv-extractions")
+    @app.get("/api/v1/pv-extractions", include_in_schema=False)
     async def list_pv_extractions(
         request: Request,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> list[dict[str, Any]]:
+    ) -> Any:
         return await services.pv.list_records(
-            base_url=str(request.base_url),
             token=token,
+            query_params=request.query_params,
         )
 
     @app.get("/pv-extractions/stats")
     @app.get("/api/v1/pv-extractions/stats", include_in_schema=False)
     async def get_pv_extraction_stats(
+        request: Request,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> dict[str, Any]:
-        return await services.pv.get_stats(token=token)
+    ) -> Any:
+        return await services.pv.get_stats(
+            token=token,
+            query_params=request.query_params,
+        )
 
-    @app.get("/pv-extractions/{record_id}", response_model=PvRecord)
-    @app.get("/api/v1/pv-extractions/{record_id}", response_model=PvRecord, include_in_schema=False)
+    @app.get("/pv-extractions/{record_id}")
+    @app.get("/api/v1/pv-extractions/{record_id}", include_in_schema=False)
     async def get_pv_extraction(
-        request: Request,
         record_id: str,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> dict[str, Any]:
-        return await services.pv.get_record(
-            base_url=str(request.base_url),
-            token=token,
-            record_id=record_id,
-        )
+    ) -> Any:
+        return await services.pv.get_record(token=token, record_id=record_id)
 
-    @app.patch("/pv-extractions/{record_id}", response_model=PvRecord)
-    @app.patch("/api/v1/pv-extractions/{record_id}", response_model=PvRecord, include_in_schema=False)
+    @app.patch("/pv-extractions/{record_id}")
+    @app.patch("/api/v1/pv-extractions/{record_id}", include_in_schema=False)
     async def update_pv_extraction(
-        request: Request,
         record_id: str,
         payload: dict[str, Any],
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> dict[str, Any]:
+    ) -> Any:
         return await services.pv.update_record(
-            base_url=str(request.base_url),
             token=token,
             record_id=record_id,
             payload=payload,
@@ -267,7 +260,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         record_id: str,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> dict[str, Any]:
+    ) -> Any:
         return await services.pv.delete_record(token=token, record_id=record_id)
 
     @app.get("/pv-extractions/{record_id}/source-document")
@@ -276,20 +269,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         record_id: str,
         token: str = Depends(get_bearer_token),
         services: ServiceContainer = Depends(get_services),
-    ) -> FileResponse:
-        source_path, file_name = await services.pv.get_source_document(
+    ) -> Response:
+        document = await services.pv.download_source_document(
             token=token,
             record_id=record_id,
         )
-        return FileResponse(
-            path=source_path,
-            filename=file_name,
-            headers={
-                "Cache-Control": "private, no-store, max-age=0",
-                "Pragma": "no-cache",
-                "X-Content-Type-Options": "nosniff",
-            },
+        response = Response(
+            content=document.body,
+            media_type=document.content_type,
         )
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        if document.content_disposition:
+            response.headers["Content-Disposition"] = document.content_disposition
+        return response
 
     return app
 
@@ -426,7 +420,10 @@ def validate_upload_content_length(request: Request, settings: Settings) -> None
     if content_length > max_request_size:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Le fichier depasse la limite autorisee de {settings.pv_upload_max_bytes // (1024 * 1024)} Mo",
+            detail=(
+                f"Le fichier depasse la limite autorisee de "
+                f"{settings.pv_upload_max_bytes // (1024 * 1024)} Mo"
+            ),
         )
 
 
