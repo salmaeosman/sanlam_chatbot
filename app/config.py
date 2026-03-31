@@ -7,6 +7,9 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
 class Settings(BaseSettings):
     app_name: str = Field(default="bawaba-de-sanlam-ai-chatbot", alias="APP_NAME")
     app_host: str = Field(default="0.0.0.0", alias="APP_HOST")
@@ -47,6 +50,10 @@ class Settings(BaseSettings):
     )
     recent_reclamations_limit: int = Field(default=5, alias="RECENT_RECLAMATIONS_LIMIT")
     recent_notifications_limit: int = Field(default=5, alias="RECENT_NOTIFICATIONS_LIMIT")
+    legal_reference_paths_raw: str = Field(default="", alias="LEGAL_REFERENCE_PATHS")
+    legal_reference_chunk_size: int = Field(default=1600, alias="LEGAL_REFERENCE_CHUNK_SIZE")
+    legal_reference_chunk_overlap: int = Field(default=250, alias="LEGAL_REFERENCE_CHUNK_OVERLAP")
+    legal_reference_max_snippets: int = Field(default=4, alias="LEGAL_REFERENCE_MAX_SNIPPETS")
 
     pv_db_path: Path = Field(
         default=Path("data") / "pv_records.sqlite3",
@@ -100,6 +107,20 @@ class Settings(BaseSettings):
             for mime_type in self.pv_upload_allowed_types_raw.split(",")
             if mime_type.strip()
         }
+
+    @property
+    def legal_reference_paths(self) -> list[Path]:
+        paths: list[Path] = []
+        for raw_path in self.legal_reference_paths_raw.split(","):
+            cleaned = raw_path.strip()
+            if not cleaned:
+                continue
+
+            path = Path(cleaned).expanduser()
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            paths.append(path)
+        return paths
 
 
 @lru_cache

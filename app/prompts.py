@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import Counter
 
 
@@ -323,6 +324,9 @@ DEFAULT_SUGGESTIONS = [
 ]
 
 
+ARABIC_CHAR_PATTERN = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]")
+
+
 def build_suggestions(
     roles: list[str],
     page_id: str | None,
@@ -377,16 +381,32 @@ def build_welcome_message(
     )
 
 
-def build_system_prompt(context: dict) -> str:
+def infer_response_language(latest_user_message: str | None) -> str:
+    if latest_user_message and ARABIC_CHAR_PATTERN.search(latest_user_message):
+        return "ar"
+    return "fr"
+
+
+def build_response_language_instruction(language: str) -> str:
+    if language == "ar":
+        return (
+            "Reponds en arabe. Garde uniquement les noms propres, les noms d'ecrans "
+            "et les termes produit tels quels s'ils existent deja en francais."
+        )
+    return "Reponds en francais."
+
+
+def build_system_prompt(context: dict, latest_user_message: str | None = None) -> str:
     user = context["user"]
     roles = [role.upper() for role in user.get("roles", [])]
     page_id = context.get("page_id")
     current_path = context.get("current_path")
     page_label = resolve_current_view_label(page_id, current_path) or "Page non definie"
     capabilities = collect_capabilities(roles)
+    response_language = infer_response_language(latest_user_message)
     sections = [
         "Tu es l'assistant applicatif expert de Bawaba de Sanlam.",
-        "Reponds toujours en francais.",
+        build_response_language_instruction(response_language),
         "Sois concret, fiable et oriente support produit.",
         "N'invente jamais des donnees, des compteurs, des actions executees ou des ecrans inexistants.",
         "Si une information live est absente, dis-le clairement.",
@@ -405,6 +425,7 @@ def build_system_prompt(context: dict) -> str:
         "Capacites a privilegier pour cet utilisateur:",
         *[f"- {item}" for item in capabilities],
         *render_contextual_knowledge(page_id, current_path),
+        *render_legal_reference_sections(context),
         *render_live_sections(context),
         "Regles de reponse:",
         "- donne des reponses courtes et operationnelles",
@@ -541,6 +562,33 @@ def render_live_sections(context: dict) -> list[str]:
             for item in top_roles:
                 sections.append(f"  - {item['role']}: {item['total']}")
 
+    return sections
+
+
+def render_legal_reference_sections(context: dict) -> list[str]:
+    snippets = context.get("legal_reference_snippets") or []
+    reference_question = bool(context.get("legal_reference_question"))
+    if not snippets and not reference_question:
+        return []
+
+    sections = [
+        "Reference juridique locale chargee:",
+        "- quand la question porte sur le Dahir charge, appuie-toi prioritairement sur les extraits ci-dessous",
+        "- cite les numeros de page utilises dans ta reponse",
+        "- si l'information n'apparait pas dans les extraits retrouves, dis-le clairement et n'invente rien",
+    ]
+
+    if not snippets:
+        sections.append("- aucun extrait pertinent n'a ete retrouve pour cette question dans le document charge")
+        return sections
+
+    sections.append("- extraits pertinents du Dahir:")
+    for snippet in snippets:
+        page_number = snippet.get("page_number", "n/a")
+        excerpt = str(snippet.get("excerpt", "")).strip()
+        if not excerpt:
+            continue
+        sections.append(f"  - page {page_number}: {excerpt}")
     return sections
 
 

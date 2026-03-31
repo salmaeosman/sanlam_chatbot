@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 
 from app.config import Settings, get_settings
 from app.gemini_service import GeminiChatService, GeminiServiceError
+from app.legal_reference_service import LegalReferenceService
 from app.pv_service import PvService
 from app.pv_schemas import PvRecord
 from app.prompts import (
@@ -46,6 +47,7 @@ class ServiceContainer:
     store: ChatSessionStore
     user_mgmt: UserMgmtClient
     gemini: GeminiChatService
+    legal_reference: LegalReferenceService
     pv: PvService
 
 
@@ -63,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             store=ChatSessionStore(effective_settings.chatbot_db_path),
             user_mgmt=user_mgmt,
             gemini=GeminiChatService(effective_settings),
+            legal_reference=LegalReferenceService(effective_settings),
             pv=PvService(effective_settings, user_mgmt),
         )
         app.state.services = services
@@ -169,12 +172,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             page_id=payload.page_id,
             current_path=payload.current_path,
         )
-        services.store.add_message(session_id, "user", payload.message.strip())
+        user_message = payload.message.strip()
+        services.store.add_message(session_id, "user", user_message)
+        legal_reference_snippets = services.legal_reference.search(user_message)
+        if legal_reference_snippets:
+            context["legal_reference_snippets"] = legal_reference_snippets
+        elif services.legal_reference.looks_like_reference_question(user_message):
+            context["legal_reference_question"] = True
         conversation_messages = build_model_messages(services.store.list_messages(session_id))
 
         try:
             answer = await services.gemini.generate_reply(
-                system_prompt=build_system_prompt(context),
+                system_prompt=build_system_prompt(context, latest_user_message=user_message),
                 conversation_messages=conversation_messages,
             )
         except GeminiServiceError as error:
