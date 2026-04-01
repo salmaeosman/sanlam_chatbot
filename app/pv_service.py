@@ -13,6 +13,7 @@ from app.pv_schemas import (
     PV_ALLOWED_MIME_TYPES,
     PV_ALLOWED_ROLES,
     NormalizedPvUpload,
+    normalize_extracted_pv_payload,
     normalize_mime_type,
     normalize_role_title,
     sanitize_displayed_file_name,
@@ -47,10 +48,11 @@ class PvService:
             mime_type=normalized_file.mime_type,
             file_bytes=normalized_file.buffer,
         )
+        normalized_extracted = normalize_extracted_pv_payload(extracted)
         persisted = await self.persist_extracted_record(
             token=token,
             file=normalized_file,
-            extracted=extracted,
+            extracted=normalized_extracted if isinstance(normalized_extracted, dict) else extracted,
         )
 
         if isinstance(persisted, dict):

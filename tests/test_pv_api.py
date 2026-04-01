@@ -77,15 +77,47 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
         "id": "pv-123",
         "documentName": "pv-test.pdf",
         "documentUrl": None,
-        "numeroPolice": "POL123",
+        "numeroPolice": None,
+        "numeroPv": "25/2026",
         "dateSurvenance": "2026-03-31",
+        "heureSurvenance": "14:35",
+        "ouverturePayload": {
+            "numeroPermisConducteur": "P1234567",
+            "categoriePermisConducteur": "B",
+        },
         "ville": "Casablanca",
         "villeAr": "الدار البيضاء",
         "adresse": "Boulevard Hassan II",
         "adresseAr": "شارع الحسن الثاني",
-        "victimes": [{"nom_fr": "Doe", "prenom_fr": "Jane"}],
+        "victimes": [
+            {
+                "nom_fr": "Doe",
+                "prenom_fr": "Jane",
+                "cin": "AB123456",
+                "etat_apres_accident": "Blessee",
+                "qualite_victime": "Pieton",
+                "date_naissance": "1960-09-12",
+                "telephone": "0630664609",
+                "itt": "30",
+            }
+        ],
         "nombreVictimes": 1,
-        "vehicules": [{"type_fr": "Voiture", "marque": "Dacia", "plaque": "123-A-45"}],
+        "vehicules": [
+            {
+                "type_fr": "Voiture",
+                "marque": "Dacia",
+                "plaque": "123-A-45",
+                "compagnie_assurance": "Saham Assurance",
+                "numero_police": "POL123",
+            },
+            {
+                "type_fr": "Camion",
+                "marque": "Isuzu",
+                "plaque": "456-B-78",
+                "compagnie_assurance": "AXA Assurance",
+                "numero_police": "POL456",
+            },
+        ],
         "texteBrut": "Resume FR",
         "texteBrutAr": "ملخص",
         "statut": "termine",
@@ -106,15 +138,50 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
             assert mime_type == "application/pdf"
             assert file_bytes.startswith(b"%PDF-")
             return {
-                "numero_police": "POL123",
+                "numero_pv": "25/2026",
                 "date_survenance": "2026-03-31",
+                "heure_survenance": "14:35",
+                "numero_permis_conducteur": "Numero du permis: P1234567",
+                "classe_permis_conducteur": "Classe du permis: b",
                 "ville_fr": "Casablanca",
                 "ville_ar": "الدار البيضاء",
                 "adresse_fr": "Boulevard Hassan II",
                 "adresse_ar": "شارع الحسن الثاني",
-                "victimes": [{"nom_fr": "Doe", "prenom_fr": "Jane"}],
-                "nombre_victimes": 1,
-                "vehicules": [{"type_fr": "Voiture", "marque": "Dacia", "plaque": "123-A-45"}],
+                "victimes": [
+                    {
+                        "nom_fr": "Doe",
+                        "prenom_fr": "Jane",
+                        "cin": "CIN N° AB 123456",
+                        "etat_apres_accident": "Blessee",
+                        "qualite_victime": "Pieton",
+                        "date_naissance": "12/09/1960",
+                        "telephone": "Tel: 06 30 664 609",
+                        "itt": "ITT 30 jours",
+                    },
+                    {
+                        "nom_fr": "Doe",
+                        "prenom_fr": "Jane",
+                        "cin": "AB123456",
+                        "telephone": "06 30 66 46 09",
+                    }
+                ],
+                "nombre_victimes": 2,
+                "vehicules": [
+                    {
+                        "type_fr": "Voiture",
+                        "marque": "Dacia",
+                        "plaque": "123-A-45",
+                        "compagnie_assurance": "Compagnie d'assurance: SAHAM assurances",
+                        "numero_police": "Numero de police: POL123",
+                    },
+                    {
+                        "type_fr": "Camion",
+                        "marque": "Isuzu",
+                        "plaque": "456-B-78",
+                        "compagnie_assurance": "Compagnie adverse: AXA Assurance",
+                        "numero_police": "Numero de police: POL456",
+                    },
+                ],
                 "texte_brut_fr": "Resume FR",
                 "texte_brut_ar": "ملخص",
             }
@@ -127,7 +194,20 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
                 assert files["file"][0] == "pv-test.pdf"
                 assert files["file"][2] == "application/pdf"
                 extracted_json = files["extractedData"][1]
+                assert '"numero_pv": "25/2026"' in extracted_json
+                assert '"heure_survenance": "14:35"' in extracted_json
+                assert '"numero_permis_conducteur": "P1234567"' in extracted_json
+                assert '"classe_permis_conducteur": "B"' in extracted_json
+                assert '"cin": "AB123456"' in extracted_json
+                assert '"date_naissance": "1960-09-12"' in extracted_json
+                assert '"telephone": "0630664609"' in extracted_json
+                assert '"itt": "30"' in extracted_json
+                assert extracted_json.count('"cin": "AB123456"') == 1
+                assert '"nombre_victimes": 1' in extracted_json
+                assert '"compagnie_assurance": "Saham Assurance"' in extracted_json
+                assert '"compagnie_assurance": "AXA Assurance"' in extracted_json
                 assert '"numero_police": "POL123"' in extracted_json
+                assert '"numero_police": "POL456"' in extracted_json
                 return _FakeResponse(
                     status_code=201,
                     json_payload=persisted_record,
@@ -182,6 +262,14 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
         assert upload_response.status_code == 201
         upload_payload = upload_response.json()
         assert upload_payload["documentName"] == "pv-test.pdf"
+        assert upload_payload["numeroPv"] == "25/2026"
+        assert upload_payload["heureSurvenance"] == "14:35"
+        assert upload_payload["ouverturePayload"]["numeroPermisConducteur"] == "P1234567"
+        assert upload_payload["ouverturePayload"]["categoriePermisConducteur"] == "B"
+        assert upload_payload["victimes"][0]["cin"] == "AB123456"
+        assert upload_payload["victimes"][0]["date_naissance"] == "1960-09-12"
+        assert upload_payload["victimes"][0]["telephone"] == "0630664609"
+        assert upload_payload["victimes"][0]["itt"] == "30"
         assert upload_payload["extractedBy"] == "back-python"
         assert upload_payload["requestedBy"] == "osman"
 

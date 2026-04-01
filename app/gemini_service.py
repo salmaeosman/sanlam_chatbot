@@ -7,7 +7,10 @@ from typing import Any
 import httpx
 
 from app.config import Settings
-from app.pv_schemas import PV_EXTRACTION_RESPONSE_JSON_SCHEMA
+from app.pv_schemas import (
+    PV_EXTRACTION_RESPONSE_JSON_SCHEMA,
+    normalize_extracted_pv_payload,
+)
 
 
 class GeminiServiceError(RuntimeError):
@@ -116,7 +119,25 @@ class GeminiChatService:
                             "text": (
                                 "Analyse ce proces-verbal d accident et extrais les informations "
                                 "en francais ET en arabe. Sois tres precis et extrait toutes les "
-                                "informations disponibles."
+                                "informations disponibles. Pour chaque victime, extrais aussi "
+                                "le numero de CIN ou le numero de la carte d identite nationale "
+                                "quand il apparait dans le document, ainsi que son etat apres "
+                                "l accident, sa qualite exacte (pieton, passager, conducteur, etc.), "
+                                "sa date de naissance, son numero de telephone et son ITT "
+                                "quand ils sont visibles. L ITT doit etre exprimee en jours. "
+                                "Extrais aussi le numero du PV, l heure de survenance, le numero "
+                                "du permis du conducteur et la classe ou categorie de son permis "
+                                "quand ils apparaissent dans le document. Pour chaque vehicule, "
+                                "extrais aussi le nom de la compagnie d assurance quand il est "
+                                "visible. Cette compagnie d assurance concerne la partie ou le "
+                                "vehicule implique, pas la victime. S il y a plusieurs vehicules "
+                                "avec plusieurs numeros de "
+                                "police, renseigne le numero de police dans chaque objet vehicule, "
+                                "pas seulement au niveau global. "
+                                "Ne cree jamais deux objets pour la meme victime, meme si elle est "
+                                "mentionnee plusieurs fois dans le document. Le champ "
+                                "nombre_victimes doit correspondre au nombre de victimes distinctes "
+                                "de la liste victimes."
                             ),
                         },
                     ],
@@ -132,9 +153,40 @@ class GeminiChatService:
                             "exactement telles qu elles apparaissent dans le document. Pour "
                             "chaque champ textuel, fournis la version francaise suffixe _fr et "
                             "la version arabe suffixe _ar. Si le texte n existe que dans une "
-                            "langue, traduis-le proprement dans l autre. Le numero_police doit "
-                            "correspondre au numero de police d assurance et non au numero du "
-                            "proces-verbal."
+                            "langue, traduis-le proprement dans l autre quand le schema le demande. "
+                            "Le numero_police doit correspondre au numero de police d assurance "
+                            "et non au numero du proces-verbal. S il existe plusieurs vehicules "
+                            "avec plusieurs polices, renseigne numero_police dans chaque vehicule. "
+                            "Le champ numero_police global ne doit etre renseigne que si un seul "
+                            "numero de police est clairement present ou si un seul numero peut etre "
+                            "rattache avec certitude. Le champ numero_pv correspond "
+                            "au numero du proces-verbal lui-meme, souvent introduit par numero PV, "
+                            "N du PV ou عدد المحضر. Extrais heure_survenance au format HH:MM "
+                            "ou HH:MM:SS. Extrais aussi numero_permis_conducteur et "
+                            "classe_permis_conducteur quand le numero du permis et sa classe ou "
+                            "categorie sont visibles pour le conducteur. Pour chaque vehicule, "
+                            "renseigne compagnie_assurance avec le nom de la compagnie "
+                            "d assurance quand elle apparait dans le PV. La compagnie "
+                            "d assurance est rattachee a la partie ou au vehicule, jamais a la "
+                            "victime. Si l assureur est "
+                            "Saham Assurance ou Sanlam, ce vehicule correspond a la partie "
+                            "assuree chez nous; une autre compagnie correspond a la partie "
+                            "adverse. Pour chaque victime, "
+                            "renseigne le champ cin avec le "
+                            "numero de CIN ou le numero de la carte d identite nationale quand "
+                            "il est visible pres des mentions CIN, N de la carte d identite "
+                            "nationale ou بطاقة التعريف الوطنية. Renseigne aussi etat_apres_accident "
+                            "en francais (par ex. Blessee, Decedee, Indemne) et qualite_victime "
+                            "en francais (par ex. Pieton, Passager, Conducteur) selon le contenu "
+                            "du PV. Renseigne date_naissance au format YYYY-MM-DD et telephone "
+                            "avec le numero de telephone de la victime quand ils sont visibles "
+                            "dans le document, y compris si la date apparait avec des libelles "
+                            "comme date de naissance, nee le, date naissance, تاريخ الازدياد "
+                            "ou تاريخ الميلاد. Renseigne aussi itt avec la duree en jours "
+                            "uniquement, par exemple 30 pour 30 jours d ITT. Retourne une seule "
+                            "entree par victime distincte et assure-toi que nombre_victimes "
+                            "corresponde au nombre d objets victimes renvoyes. N invente jamais "
+                            "une valeur absente."
                         ),
                     },
                 ],
@@ -142,6 +194,7 @@ class GeminiChatService:
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseJsonSchema": PV_EXTRACTION_RESPONSE_JSON_SCHEMA,
+                "temperature": 0,
             },
         }
 
@@ -197,7 +250,9 @@ class GeminiChatService:
             ) from error
 
         if isinstance(parsed, dict):
-            return parsed
+            normalized_payload = normalize_extracted_pv_payload(parsed)
+            if isinstance(normalized_payload, dict):
+                return normalized_payload
 
         raise GeminiServiceError("La reponse de Gemini est invalide", status_code=502)
 
