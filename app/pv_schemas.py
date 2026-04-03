@@ -75,6 +75,33 @@ PV_EXTRACTION_RESPONSE_JSON_SCHEMA = {
             "type": "string",
             "description": "Adresse exacte de l accident en arabe",
         },
+        "assure": {
+            "type": "object",
+            "description": (
+                "Assure ou souscripteur mentionne dans le PV. Il s agit de la personne "
+                "ou de la societe assuree, pas de la compagnie d assurance."
+            ),
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": (
+                        "Type d assure: personne_physique ou personne_morale"
+                    ),
+                },
+                "nom": {
+                    "type": "string",
+                    "description": "Nom de l assure personne physique",
+                },
+                "prenom": {
+                    "type": "string",
+                    "description": "Prenom de l assure personne physique",
+                },
+                "nom_societe": {
+                    "type": "string",
+                    "description": "Nom de la societe si l assure est une personne morale",
+                },
+            },
+        },
         "victimes": {
             "type": "array",
             "description": "Liste des victimes avec nom et prenom en francais et arabe",
@@ -576,6 +603,111 @@ def normalize_insurance_company(value: object) -> str | None:
         return "Sanlam"
 
     return normalized
+
+
+def normalize_assure_type(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    cleaned = (
+        value.translate(_ARABIC_DIGIT_TRANSLATION)
+        .replace("\u200f", " ")
+        .replace("\u200e", " ")
+        .replace("\xa0", " ")
+        .strip()
+    )
+    if not cleaned:
+        return None
+
+    normalized = unicodedata.normalize("NFD", cleaned)
+    normalized = "".join(character for character in normalized if not unicodedata.combining(character))
+    normalized = " ".join(normalized.split()).strip().casefold()
+    if not normalized:
+        return None
+
+    if (
+        normalized == "sa"
+        or "morale" in normalized
+        or "societe" in normalized
+        or "entreprise" in normalized
+        or "sarl" in normalized
+        or "company" in normalized
+        or "corporate" in normalized
+    ):
+        return "personne_morale"
+
+    if "physique" in normalized or "personne" in normalized or "individual" in normalized:
+        return "personne_physique"
+
+    return None
+
+
+def _normalize_assure_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    cleaned = (
+        value.translate(_ARABIC_DIGIT_TRANSLATION)
+        .replace("\u200f", " ")
+        .replace("\u200e", " ")
+        .replace("\xa0", " ")
+        .strip()
+    )
+    if not cleaned:
+        return None
+
+    normalized = " ".join(cleaned.replace(":", " ").replace(";", " ").split()).strip(" ,.-")
+    return normalized or None
+
+
+def normalize_assure_payload(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+
+    assure_type = normalize_assure_type(
+        value.get("type")
+        or value.get("assure_type")
+        or value.get("assureType")
+        or value.get("person_type")
+        or value.get("personType")
+    )
+    nom = _normalize_assure_text(
+        value.get("nom")
+        or value.get("nom_fr")
+        or value.get("last_name")
+        or value.get("lastName")
+    )
+    prenom = _normalize_assure_text(
+        value.get("prenom")
+        or value.get("prenom_fr")
+        or value.get("first_name")
+        or value.get("firstName")
+    )
+    nom_societe = _normalize_assure_text(
+        value.get("nom_societe")
+        or value.get("nomSociete")
+        or value.get("societe")
+        or value.get("company_name")
+        or value.get("companyName")
+        or value.get("raison_sociale")
+        or value.get("raisonSociale")
+    )
+
+    if (assure_type == "personne_morale" or (not assure_type and nom_societe)) and nom_societe:
+        return {
+            "type": "personne_morale",
+            "nom_societe": nom_societe,
+        }
+
+    if (assure_type == "personne_physique" or (not assure_type and (nom or prenom))) and (nom or prenom):
+        normalized_payload: dict[str, str] = {"type": "personne_physique"}
+        if nom:
+            normalized_payload["nom"] = nom
+        if prenom:
+            normalized_payload["prenom"] = prenom
+        return normalized_payload
+
+    return None
 
 
 def normalize_birth_date(value: object) -> str | None:
@@ -1192,6 +1324,12 @@ def normalize_extracted_pv_payload(payload: object) -> object:
     )
     if normalized_permit_class is not None:
         next_payload["classe_permis_conducteur"] = normalized_permit_class
+
+    normalized_assure = normalize_assure_payload(payload.get("assure"))
+    if normalized_assure is not None:
+        next_payload["assure"] = normalized_assure
+    else:
+        next_payload.pop("assure", None)
 
     vehicules = payload.get("vehicules")
     if isinstance(vehicules, list):

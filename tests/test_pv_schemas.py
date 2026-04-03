@@ -25,6 +25,10 @@ def test_normalize_extracted_pv_payload_adds_cin_per_victim() -> None:
         "heure_survenance": "١٤:٣٥",
         "numero_permis_conducteur": "Numero du permis: P-123456",
         "classe_permis_conducteur": "Categorie du permis: b",
+        "assure": {
+            "type": "Personne morale",
+            "nomSociete": "  Alpha  Conseil  ",
+        },
         "vehicules": [
             {
                 "type_fr": "Voiture",
@@ -69,6 +73,10 @@ def test_normalize_extracted_pv_payload_adds_cin_per_victim() -> None:
     assert normalized["heure_survenance"] == "14:35"
     assert normalized["numero_permis_conducteur"] == "P-123456"
     assert normalized["classe_permis_conducteur"] == "B"
+    assert normalized["assure"] == {
+        "type": "personne_morale",
+        "nom_societe": "Alpha Conseil",
+    }
     assert "numero_police" not in normalized
     assert normalized["vehicules"][0]["compagnie_assurance"] == "Saham Assurance"
     assert normalized["vehicules"][1]["compagnie_assurance"] == "AXA Assurance"
@@ -211,3 +219,23 @@ def test_normalize_extracted_pv_payload_uses_summary_count_when_details_are_part
 
     assert len(normalized["victimes"]) == 1
     assert normalized["nombre_victimes"] == 2
+
+
+def test_normalize_extracted_pv_payload_normalizes_personne_physique_assure() -> None:
+    payload = {
+        "assure": {
+            "assureType": "personne physique",
+            "nom_fr": "  El Fassi ",
+            "prenom_fr": " Asmae  ",
+        },
+        "victimes": [],
+        "vehicules": [],
+    }
+
+    normalized = normalize_extracted_pv_payload(payload)
+
+    assert normalized["assure"] == {
+        "type": "personne_physique",
+        "nom": "El Fassi",
+        "prenom": "Asmae",
+    }

@@ -89,6 +89,10 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
         "villeAr": "الدار البيضاء",
         "adresse": "Boulevard Hassan II",
         "adresseAr": "شارع الحسن الثاني",
+        "assure": {
+            "type": "personne_morale",
+            "nom_societe": "Alpha Conseil",
+        },
         "victimes": [
             {
                 "nom_fr": "Doe",
@@ -143,6 +147,10 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
                 "heure_survenance": "14:35",
                 "numero_permis_conducteur": "Numero du permis: P1234567",
                 "classe_permis_conducteur": "Classe du permis: b",
+                "assure": {
+                    "type": "Personne morale",
+                    "nomSociete": "Alpha Conseil",
+                },
                 "ville_fr": "Casablanca",
                 "ville_ar": "الدار البيضاء",
                 "adresse_fr": "Boulevard Hassan II",
@@ -198,6 +206,7 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
                 assert '"heure_survenance": "14:35"' in extracted_json
                 assert '"numero_permis_conducteur": "P1234567"' in extracted_json
                 assert '"classe_permis_conducteur": "B"' in extracted_json
+                assert '"assure": {"type": "personne_morale", "nom_societe": "Alpha Conseil"}' in extracted_json
                 assert '"cin": "AB123456"' in extracted_json
                 assert '"date_naissance": "1960-09-12"' in extracted_json
                 assert '"telephone": "0630664609"' in extracted_json
@@ -266,6 +275,8 @@ def test_pv_endpoints_use_python_flow_and_proxy_user_mgmt(tmp_path: Path) -> Non
         assert upload_payload["heureSurvenance"] == "14:35"
         assert upload_payload["ouverturePayload"]["numeroPermisConducteur"] == "P1234567"
         assert upload_payload["ouverturePayload"]["categoriePermisConducteur"] == "B"
+        assert upload_payload["assure"]["type"] == "personne_morale"
+        assert upload_payload["assure"]["nom_societe"] == "Alpha Conseil"
         assert upload_payload["victimes"][0]["cin"] == "AB123456"
         assert upload_payload["victimes"][0]["date_naissance"] == "1960-09-12"
         assert upload_payload["victimes"][0]["telephone"] == "0630664609"

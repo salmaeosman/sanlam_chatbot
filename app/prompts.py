@@ -201,7 +201,7 @@ ROUTE_GUIDES = [
             "ouvrir le detail d'une reclamation et envoyer un message",
             "demarrer la creation d'une nouvelle reclamation",
         ],
-        "suggestions": [
+        "suggestions": [ 
             "Explique les statuts de mes reclamations medecin",
             "Comment filtrer mes reclamations medecin ?",
             "Comment ouvrir une nouvelle reclamation medecin ?",
